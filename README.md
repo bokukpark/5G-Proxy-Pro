@@ -146,6 +146,34 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 停止方式：回到 App 點「🛑 Stop Proxy Service」。停止後所有監聽器會立即關閉、Port 完全釋放，且不會被系統或健康檢查悄悄重啟（v1.4.0 起）。
 
+### 透過 Tailscale 存取（Tailnet Relay，可選）
+
+想讓**不在同一區網**的裝置經由 Tailscale（`100.x.y.z` 或 `*.ts.net`）使用這支手機的 5G 出口時，需要另外安裝 **5G Proxy Tailnet Relay**（`relay/` 模組，套件名 `com.tokyoxpa3.androidproxy.relay`）。
+
+**為什麼不能只靠主程式？** Android 的 per-app VPN 以「App（UID）」為單位決定路由，主程式無論怎麼設定都只能滿足一半：
+
+| 主程式在 Tailscale 中的設定 | 從 Tailscale IP 連進來 | 從 5G 出去 |
+|---|---|---|
+| 排除 | ❌ 回應封包無法走 `tun0` 回去（連線逾時） | ✅ |
+| 包含 | ✅ | ❌ Tailscale 不允許 bypass，`bindSocket` 被拒（`EPERM`），代理無法啟動 |
+
+Relay 是另一個 App（另一個 UID）：它留在 Tailscale 內負責「進」，把 tailnet 進來的 TCP 原封不動轉給主程式的 `127.0.0.1` 監聽；主程式排除在 Tailscale 外負責「出」。loopback 不受 VPN 影響。
+
+```
+[tailnet 客戶端] --Tailscale--> [Relay: 100.x.y.z:1080] --loopback--> [主程式 127.0.0.1:1080] --5G--> 網際網路
+```
+
+設定步驟：
+
+1. Tailscale 設定 → 分應用通道：**排除 5G Proxy Pro**；**不要排除** 5G Proxy Tailnet Relay
+2. 啟動 5G Proxy Pro（例如埠 `1080`）
+3. 開啟 Relay → 「Disable battery optimization」允許（否則 Doze 時 tailnet 連線會被切斷）→ 埠號填相同的 `1080` →「Start relay」
+4. 畫面出現 `Listening: 100.x.y.z` 後，客戶端改用 `socks5://<Tailscale IP 或 MagicDNS 名稱>:1080`
+
+> ℹ️ Relay 只綁定 `tun*` 介面上的 Tailscale 位址（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`），不會綁到電信 CGNAT（同樣是 `100.64.0.0/10`，但在 `rmnet`/`ccmni` 上）或其他 VPN 的隧道位址；Tailscale 重連換位址時每 5 秒自動對帳。
+>
+> ⚠️ Relay 是純 TCP 管線：SOCKS5 標準的 **UDP ASSOCIATE 經 Tailscale 無法使用**（它會另開 UDP 埠）；本專案的 **UDP-in-TCP（`0x04`）可正常使用**。帳密認證由主程式處理，經 Relay 一樣有效。
+
 ---
 
 ## 專案架構
@@ -173,6 +201,10 @@ AndroidProxy/
 │       ├── socks5_protocol.h    # 純協定解析/封裝宣告（TCP 握手 + UDP datagram，host 可測）
 │       ├── socks5_protocol.c    # 純協定解析/封裝實作（零 socket 依賴）
 │       └── CMakeLists.txt
+└── relay/src/main/java/com/tokyoxpa3/androidproxy/relay/   # 可選的 Tailnet Relay（獨立 APK）
+    ├── RelayActivity.kt          # 埠號、啟停、狀態
+    ├── RelayService.kt           # Tailscale 位址 → 127.0.0.1:port 的 TCP 轉送
+    └── TailscaleAddress.kt       # tun* + Tailscale 網段判斷（純函式，可單元測試）
 ```
 
 ### 流量路徑
