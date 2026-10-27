@@ -174,6 +174,43 @@ Relay 是另一個 App（另一個 UID）：它留在 Tailscale 內負責「進�
 >
 > ⚠️ Relay 是純 TCP 管線：SOCKS5 標準的 **UDP ASSOCIATE 經 Tailscale 無法使用**（它會另開 UDP 埠）；本專案的 **UDP-in-TCP（`0x04`）可正常使用**。帳密認證由主程式處理，經 Relay 一樣有效。
 
+#### 遠端更換 5G IP（飛航模式輪替）
+
+Relay 另在 Tailscale 位址上開一個控制 API（預設埠 `8081`），可遠端觸發「飛航模式 ON → 5 秒 → OFF」讓電信端重新配發公網 IP。
+
+一般 App 自 Android 4.2 起無法切換飛航模式；不需 root 的唯一公開途徑是以**預設數位助理**身分發出 `Settings.ACTION_VOICE_CONTROL_AIRPLANE_MODE`。因此需先設定一次：
+
+1. Relay 畫面點「Set as default digital assistant」→ 在「預設應用程式 → 數位助理應用程式」（Samsung：「裝置協助應用程式」）選 **5G Proxy Tailnet Relay**
+2. 回到 Relay，按鈕顯示「✅ Default digital assistant」即完成
+3. 若主程式有設定帳密，在 Relay 的帳號/密碼欄填入相同值（查詢公網 IP 時要經過主程式代理）
+
+```sh
+H=<Tailscale IP 或 MagicDNS 名稱>
+curl -X POST http://$H:8081/rotate   # 開始輪替，立即回 202（進行中再呼叫回 409）
+curl http://$H:8081/status           # 最近一次輪替結果
+curl http://$H:8081/ip               # 目前 5G 出口公網 IP
+```
+
+`/status` 回應範例：
+
+```json
+{"state":"changed","old_ip":"175.223.11.208","new_ip":"175.223.19.22","attempts":1,"error":null,
+ "started_at":1793113079490,"finished_at":1793113092554,"assistant_active":true}
+```
+
+| `state` | 意義 |
+|---|---|
+| `running` | 進行中 |
+| `changed` | 已換到新 IP |
+| `unchanged` | 重試 3 次仍拿到同一個 IP（電信端配發相同位址） |
+| `failed` | 失敗，原因見 `error`（例如 Relay 不是預設助理、5G 90 秒內未恢復） |
+
+- 飛航模式期間 Wi-Fi 與 Tailscale 也會中斷約 10–30 秒，此時呼叫 API 會連不上，屬正常；流程由手機端自行跑完，恢復後再查 `/status`。任何失敗路徑都會確保飛航模式被關回。
+- 輪替會切斷所有進行中的代理連線；主程式會自動切換到新的蜂巢式網路，**不需重啟代理**。
+- 控制 API **不做認證**，只綁在 Tailscale 位址上：tailnet 內任何裝置都可觸發輪替，請以 Tailscale ACL 控管存取。
+- Relay 設為預設助理後，系統在開機、App 更新或被殺後都會重新綁定它，Relay 若先前為開啟狀態會自動恢復。
+- 實機驗證：SM-G950F / Android 9（KT LTE），兩次輪替皆於第 1 次嘗試換到新 IP（約 10–13 秒）。
+
 ---
 
 ## 專案架構
@@ -203,7 +240,10 @@ AndroidProxy/
 │       └── CMakeLists.txt
 └── relay/src/main/java/com/tokyoxpa3/androidproxy/relay/   # 可選的 Tailnet Relay（獨立 APK）
     ├── RelayActivity.kt          # 埠號、啟停、狀態
-    ├── RelayService.kt           # Tailscale 位址 → 127.0.0.1:port 的 TCP 轉送
+    ├── RelayService.kt           # Tailscale 位址 → 127.0.0.1:port 的 TCP 轉送 + 控制 API
+    ├── AirplaneAssistant.kt      # 預設數位助理：切換飛航模式
+    ├── IpRotator.kt              # 飛航模式輪替流程 + 經主程式查公網 IP
+    ├── ControlHttp.kt            # 控制 API 的 HTTP 剖析（純函式，可單元測試）
     └── TailscaleAddress.kt       # tun* + Tailscale 網段判斷（純函式，可單元測試）
 ```
 
@@ -296,6 +336,7 @@ Server → Client: {0x05, 0x00, 0x00, 0x01, BND.ADDR, BND.PORT}（標準成功�
 | 原生引擎健康檢查 | `connectivitycheck.gstatic.com` / `captive.apple.com` / `connect.rom.miui.com`（依序備援，透過 5G） | 每 10 秒，驗證伺服器存活 |
 | 公網 IP 顯示 | `api.ipify.org` | 按下「刷新狀態」時 |
 | 自我檢測 | example.com（透過 5G 代理） | 僅在點擊「自我檢測」時 |
+| Relay 公網 IP 查詢 | `api.ipify.org`（經主程式 SOCKS5，走 5G） | 呼叫 Relay 的 `/rotate`、`/ip` 時 |
 
 所有代理流量（客戶端透過 SOCKS5 轉送）都經由鎖定的蜂巢式網路介面輸出。
 
