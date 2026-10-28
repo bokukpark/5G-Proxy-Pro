@@ -82,6 +82,21 @@ curl http://$H:8081/ip               # 현재 LTE 공인 IP
 | `unchanged` | 3번 시도했지만 통신사가 같은 IP를 줌 |
 | `failed` | 실패. `error` 참고 |
 
+### `/status`의 `network`, `data_usage`
+
+`/status`는 위 항목에 더해 OS가 가진 네트워크 상태와 데이터 사용량을 함께 돌려줍니다. 조회할 때 추가 데이터는 쓰지 않습니다.
+
+```json
+"network": {"internet_ok":true,"cellular_internet_ok":true,"airplane_mode":false,
+  "networks":[{"transport":"cellular","interface":"rmnet4","validated":true,"captive_portal":false,"metered":true,"suspended":false}, ...]},
+"data_usage": {"today":{"total_mb":1.8,...},"this_month":{"total_mb":28.3,...},"last_30_days":{...}}
+```
+
+- `validated`: Android가 직접 검사해서 실제로 인터넷이 된다고 판단한 망입니다. 셀룰러가 있는데 `false`이면 데이터 소진으로 차단됐거나, 통신사 안내 페이지로 리다이렉트되는 중이거나(`captive_portal`), 신호가 약한 경우입니다.
+- `cellular_internet_ok`: 셀룰러 망이 없으면(비행기 모드, 데이터 꺼짐) `null`입니다.
+- `data_usage`: 폰 전체의 모바일 데이터 사용량입니다(설정 > 데이터 사용과 같은 값). `this_month`는 매달 1일부터 계산합니다. 설정에 지정한 사용 주기 시작일은 앱이 읽을 수 없습니다. 통계는 약 2시간 단위로 묶여서 최근 사용량은 늦게 반영될 수 있습니다.
+- `data_usage`를 보려면 Relay에서 **"Allow usage access"**를 눌러 **사용 정보 접근**을 허용해야 합니다. Android 9 이하는 전화 권한도 허용해야 합니다. adb로 허용하려면 `adb shell appops set com.tokyoxpa3.androidproxy.relay GET_USAGE_STATS allow`를 실행합니다.
+
 - 진행 중 10~30초 동안은 **Wi-Fi와 Tailscale도 끊깁니다.** 이때 API 호출이 실패하는 것은 정상이고, 폰이 혼자 끝까지 진행합니다. 다시 연결된 뒤 `/status`로 확인하세요. 실패하더라도 비행기 모드는 반드시 다시 끕니다.
 - 진행 중이던 프록시 연결은 모두 끊깁니다. 프록시를 다시 시작할 필요는 없습니다.
 - 제어 API에는 **인증이 없습니다.** tailnet 안의 모든 기기가 호출할 수 있으므로, 필요하면 Tailscale ACL로 접근을 제한하세요.
