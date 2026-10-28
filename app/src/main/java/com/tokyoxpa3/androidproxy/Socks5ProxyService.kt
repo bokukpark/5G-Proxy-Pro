@@ -441,58 +441,62 @@ class Socks5ProxyService : Service() {
                 // 活著——每重建一次累積一組 watchdog / stats 迴圈。
                 loopsJob?.cancel()
                 loopsJob = serviceScope.launch {
-                    launch {
-                        var consecutiveFailures = 0
-                        var lastRxBytes = NativeEngine.safeGetTrafficBytes()?.getOrNull(1) ?: 0L
-                        while (isProxyRunning) {
-                            delay(15000)
-                            if (!isProxyRunning) break
-                            // [滿載誤判] 只要 target 端仍有位元組在進來，線路顯然是通的。
-                            // 滿載時 generate_204 探測容易逾時；若照舊連續 3 次失敗就重建，
-                            // 會把正在下載的連線整批切斷。改以實際流量為主要健康依據。
-                            val rxBytes = NativeEngine.safeGetTrafficBytes()?.getOrNull(1) ?: lastRxBytes
-                            val trafficFlowing = rxBytes > lastRxBytes
-                            lastRxBytes = rxBytes
-                            if (trafficFlowing) {
-                                consecutiveFailures = 0
-                                lastHealthCheck = "OK (traffic)"
-                                continue
-                            }
-                            val currentNetwork = cellularNetwork
-                            if (currentNetwork == null) {
-                                lastHealthCheck = "WAITING_NETWORK"
-                                continue
-                            }
-                            when (checkNetworkHealth(currentNetwork)) {
-                                NetworkHealthStatus.OK -> {
-                                    consecutiveFailures = 0
-                                    lastHealthCheck = "OK"
-                                }
-                                NetworkHealthStatus.BLOCKED_BY_VPN -> {
-                                    // 被 VPN 阻擋（設定問題：本 App 被納入 VPN 隧道）：切勿觸發 restartProxy！
-                                    // 重啟無法解決設定問題，且會陷入無限重啟迴圈並切斷所有既有連線。
-                                    // 註：能走到這一支，代表 bind 探測失敗且蜂巢式仍被系統驗證可用
-                                    // （VALIDATED）—— 這是 NetworkHealthClassifier 判定「真的被擋」
-                                    // 的完整條件；缺任何一項都會落到 NETWORK_DEAD 走重建。
-                                    consecutiveFailures = 0
-                                    lastHealthCheck = "BLOCKED_BY_VPN"
-                                    Log.w(TAG, "健康檢查判定為被 VPN 阻擋（蜂巢式出口 bind 被拒且網路仍有效）；跳過自動重啟，請將本 App 排除在 VPN 之外")
-                                    val nm = getSystemService(NotificationManager::class.java)
-                                    nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_vpn_warning)))
-                                }
-                                NetworkHealthStatus.NETWORK_DEAD -> {
-                                    consecutiveFailures++
-                                    lastHealthCheck = "FAILED (${consecutiveFailures}/3)"
-                                    Log.w(TAG, "5G 網路健康檢查失敗 (${consecutiveFailures}/3)，準備自動重建...")
-                                    if (consecutiveFailures >= 3) {
-                                        Log.w(TAG, "5G 網路連續異常，自動重建代理連線...")
-                                        restartProxy(port)
-                                        break
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // [暫停] 15 秒一次的健康檢查（閒置時打 generate_204）會走蜂巢式、吃掉流量
+                    // （閒置一整天約 7 MB）。先整段停用；網路變動仍由 startMonitoring 的
+                    // onAvailable / onLost 回呼處理。之後改成「先看 VALIDATED、失效才探測」再開回來。
+                    lastHealthCheck = "DISABLED"
+//                    launch {
+//                        var consecutiveFailures = 0
+//                        var lastRxBytes = NativeEngine.safeGetTrafficBytes()?.getOrNull(1) ?: 0L
+//                        while (isProxyRunning) {
+//                            delay(15000)
+//                            if (!isProxyRunning) break
+//                            // [滿載誤判] 只要 target 端仍有位元組在進來，線路顯然是通的。
+//                            // 滿載時 generate_204 探測容易逾時；若照舊連續 3 次失敗就重建，
+//                            // 會把正在下載的連線整批切斷。改以實際流量為主要健康依據。
+//                            val rxBytes = NativeEngine.safeGetTrafficBytes()?.getOrNull(1) ?: lastRxBytes
+//                            val trafficFlowing = rxBytes > lastRxBytes
+//                            lastRxBytes = rxBytes
+//                            if (trafficFlowing) {
+//                                consecutiveFailures = 0
+//                                lastHealthCheck = "OK (traffic)"
+//                                continue
+//                            }
+//                            val currentNetwork = cellularNetwork
+//                            if (currentNetwork == null) {
+//                                lastHealthCheck = "WAITING_NETWORK"
+//                                continue
+//                            }
+//                            when (checkNetworkHealth(currentNetwork)) {
+//                                NetworkHealthStatus.OK -> {
+//                                    consecutiveFailures = 0
+//                                    lastHealthCheck = "OK"
+//                                }
+//                                NetworkHealthStatus.BLOCKED_BY_VPN -> {
+//                                    // 被 VPN 阻擋（設定問題：本 App 被納入 VPN 隧道）：切勿觸發 restartProxy！
+//                                    // 重啟無法解決設定問題，且會陷入無限重啟迴圈並切斷所有既有連線。
+//                                    // 註：能走到這一支，代表 bind 探測失敗且蜂巢式仍被系統驗證可用
+//                                    // （VALIDATED）—— 這是 NetworkHealthClassifier 判定「真的被擋」
+//                                    // 的完整條件；缺任何一項都會落到 NETWORK_DEAD 走重建。
+//                                    consecutiveFailures = 0
+//                                    lastHealthCheck = "BLOCKED_BY_VPN"
+//                                    Log.w(TAG, "健康檢查判定為被 VPN 阻擋（蜂巢式出口 bind 被拒且網路仍有效）；跳過自動重啟，請將本 App 排除在 VPN 之外")
+//                                    val nm = getSystemService(NotificationManager::class.java)
+//                                    nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_vpn_warning)))
+//                                }
+//                                NetworkHealthStatus.NETWORK_DEAD -> {
+//                                    consecutiveFailures++
+//                                    lastHealthCheck = "FAILED (${consecutiveFailures}/3)"
+//                                    Log.w(TAG, "5G 網路健康檢查失敗 (${consecutiveFailures}/3)，準備自動重建...")
+//                                    if (consecutiveFailures >= 3) {
+//                                        Log.w(TAG, "5G 網路連續異常，自動重建代理連線...")
+//                                        restartProxy(port)
+//                                        break
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    }
 
                     launch {
                         while (isProxyRunning && !stopRequested) {
