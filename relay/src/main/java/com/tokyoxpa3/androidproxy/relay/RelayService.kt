@@ -197,7 +197,7 @@ class RelayService : Service() {
     /**
      * 控制 API（僅綁在 Tailscale 位址；不做認證，tailnet 內任何裝置都可呼叫）：
      *   POST /rotate  → 202，背景執行飛航模式輪替（期間 Tailscale 會斷，結果用 /status 查）
-     *   GET  /status  → 最近一次輪替的狀態 + 系統網路判定（network）+ 整機行動數據用量（data_usage）
+     *   GET  /status  → 最近一次輪替的狀態 + 系統網路判定（network）+ 整機行動數據用量（data_usage）+ SIM 門號（sim）
      *   GET  /ip      → 目前 5G 出口公網 IP
      */
     private fun handleControl(client: Socket) {
@@ -220,6 +220,7 @@ class RelayService : Service() {
                 req.method == "GET" && req.path == "/status" -> 200 to org.json.JSONObject(statusJson(rot.status))
                     .put("network", DeviceStatus.networkJson(applicationContext))
                     .put("data_usage", DeviceStatus.dataUsageJson(applicationContext))
+                    .put("sim", DeviceStatus.simJson(applicationContext))
                     .toString()
                 req.method == "GET" && req.path == "/ip" -> {
                     val ip = rot.fetchPublicIp()

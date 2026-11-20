@@ -109,6 +109,10 @@ class RelayActivity : Activity() {
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.READ_PHONE_STATE), 2)
         }
+        // /status 的 sim.phone_number
+        if (checkSelfPermission(android.Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_PHONE_NUMBERS), 3)
+        }
     }
 
     private fun numberInput(hintText: String, value: Int) = EditText(this).apply {
