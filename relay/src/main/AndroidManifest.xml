@@ -15,6 +15,8 @@
     <!-- Android 9 以下查行動數據用量需要 subscriberId -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE"
         android:maxSdkVersion="28" />
+    <!-- /status 的 sim.phone_number（本機門號）；Android 8 起讀門號用這個權限 -->
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
 
     <application
         android:allowBackup="false"

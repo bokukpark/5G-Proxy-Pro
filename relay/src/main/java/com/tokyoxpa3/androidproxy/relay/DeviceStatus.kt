@@ -8,6 +8,8 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Process
+import android.content.pm.PackageManager
+import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import org.json.JSONArray
 import org.json.JSONObject
@@ -120,6 +122,40 @@ object DeviceStatus {
             context.getSystemService(TelephonyManager::class.java).subscriberId
         } catch (e: SecurityException) {
             null
+        }
+    }
+
+    /**
+     * SIM 資訊：門號、電信商、SIM 狀態。只讀系統值，不發網路請求。
+     * 門號取自 SIM 的 MSISDN（電信商沒寫進 SIM 時為 null）；電信商名稱 SIM 沒有時改用目前註冊的網路名稱。
+     */
+    @SuppressLint("MissingPermission", "HardwareIds")
+    fun simJson(context: Context): JSONObject {
+        val tm = context.getSystemService(TelephonyManager::class.java)
+        val simState = when (tm.simState) {
+            TelephonyManager.SIM_STATE_READY -> "ready"
+            TelephonyManager.SIM_STATE_ABSENT -> "absent"
+            TelephonyManager.SIM_STATE_PIN_REQUIRED, TelephonyManager.SIM_STATE_PUK_REQUIRED -> "locked"
+            else -> "unknown"
+        }
+        val granted = context.checkSelfPermission(android.Manifest.permission.READ_PHONE_NUMBERS) ==
+            PackageManager.PERMISSION_GRANTED
+        val number: String? = if (!granted) null else try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                val sm = context.getSystemService(SubscriptionManager::class.java)
+                sm.getPhoneNumber(SubscriptionManager.getDefaultDataSubscriptionId())
+            } else {
+                @Suppress("DEPRECATION")
+                tm.line1Number
+            }
+        } catch (e: SecurityException) {
+            null
+        }
+        return JSONObject().apply {
+            put("state", simState)
+            put("carrier", listOf(tm.simOperatorName, tm.networkOperatorName).firstOrNull { !it.isNullOrBlank() } ?: JSONObject.NULL)
+            put("phone_number", number?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+            if (!granted) put("error", "READ_PHONE_NUMBERS not granted")
         }
     }
 }
